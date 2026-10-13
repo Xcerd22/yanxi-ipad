@@ -1,6 +1,9 @@
 /* Cache the complete application before allowing a local material import. */
 'use strict';
 (() => {
+  if (window.top && window.top !== window.self) return;
+  const base = typeof document !== 'undefined' && document.currentScript?.src
+    ? new URL('../',document.currentScript.src).href : new URL('./',location.href).href;
   let state = {ready:false,message:'正在保存离线应用…'};
   function update(ready,message) {
     state={ready,message};
@@ -11,8 +14,10 @@
     return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),milliseconds);})]).finally(()=>clearTimeout(timer));
   }
   async function prepare() {
+    if (!window.YanxiSecurity) throw new Error('安全组件未加载，请保持联网后重新打开。');
+    window.YanxiSecurity.assertTopLevel();
     if(!window.isSecureContext || !('serviceWorker' in navigator)) throw new Error('首次安装需要用 Safari 打开 HTTPS 网址；不能从“文件”直接打开部署包。');
-    const scope=new URL('./',location.href).href;
+    const scope=base;
     const scriptURL=new URL('sw.js',scope).href;
     let registration=await navigator.serviceWorker.getRegistration(scope);
     const ownsScope=registration?.scope===scope&&[registration.active,registration.waiting,registration.installing].some(worker=>worker?.scriptURL===scriptURL);

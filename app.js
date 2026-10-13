@@ -1,6 +1,9 @@
 /* 研习 — self-contained, offline study workspace. No external requests. */
 'use strict';
 (() => {
+  if (window.top && window.top !== window.self) return;
+  if (document.querySelector('link[rel="manifest"]') && (!window.YanxiSecurity || !window.YanxiPlatform)) return;
+  window.YanxiSecurity?.assertTopLevel();
   const STORAGE_KEY = 'yanxi.study.v1';
   const platform = window.YanxiPlatform;
   let ready = false;
@@ -48,7 +51,9 @@
     next.lastBackup = typeof raw.lastBackup === 'string' ? raw.lastBackup.slice(0, 50) : '';
     return next;
   }
-  try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) progress = sanitizeProgress(JSON.parse(raw)); } catch (e) { storageAvailable = false; console.warn('Local progress could not be read:', e.message); }
+  function readProgress() {
+    try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) progress = sanitizeProgress(JSON.parse(raw)); } catch (e) { storageAvailable = false; console.warn('Local progress could not be read:', e.message); }
+  }
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(progress)); storageAvailable = true; return true; }
     catch (e) { storageAvailable = false; toast('浏览器未能保存进度，请立即到设置中导出备份。'); return false; }
@@ -139,7 +144,8 @@
         if (display) prose = prose.trimEnd();
         out += esc(prose).replace(/\n/g, '<br>');
         try {
-          out += window.katex.renderToString(tex, {displayMode: display, throwOnError: true, strict: 'ignore', trust: false, output: 'htmlAndMathml'});
+          if (tex.length > 12000) throw new Error('公式超过排版长度限制');
+          out += window.katex.renderToString(tex, {displayMode: display, throwOnError: true, strict: 'ignore', trust: false, maxSize:20, maxExpand:1000, output: 'htmlAndMathml'});
         } catch (error) {
           out += `<code class="math-fallback">${esc(tex)}</code>`;
           console.warn('公式暂未排版:', error.message);
@@ -350,12 +356,13 @@
   $('#menu-toggle').addEventListener('click',()=>{const open=$('#sidebar').classList.toggle('open');$('#sidebar-scrim').classList.toggle('open',open);$('#menu-toggle').setAttribute('aria-expanded',open);});
   $('#sidebar-scrim').addEventListener('click',closeSidebar);
   window.addEventListener('hashchange',render);
-  window.addEventListener('storage',event=>{if(event.key===STORAGE_KEY&&event.newValue){try{progress=sanitizeProgress(JSON.parse(event.newValue));renderNav();toast('另一窗口的学习进度已同步，切换页面可查看。');}catch{}}});
+  window.addEventListener('storage',event=>{if(ready&&event.key===STORAGE_KEY&&event.newValue){try{progress=sanitizeProgress(JSON.parse(event.newValue));renderNav();toast('另一窗口的学习进度已同步，切换页面可查看。');}catch{}}});
   async function start() {
     try {
       if(platform) { const imported=await platform.initialize();if(!imported)return;data=imported; }
       else { const response=await fetch('/api/data');if(!response.ok)throw new Error(`资料服务返回 ${response.status}`);data=await response.json(); }
       if(!Array.isArray(data.subjects)||!Array.isArray(data.sources)||!Array.isArray(data.questions))throw new Error('本地资料索引格式不完整');
+      readProgress();
       orderCourses();
       data.subjects.forEach(s=>{const style=SUBJECT_STYLES[s.id]||SUBJECT_STYLES.nonlinear;s._color=/^#[0-9a-fA-F]{3,8}$/.test(s.color||'')?s.color:style.color;s._tint=style.tint;s._glyph=style.glyph;subjects.set(s.id,s);arr(s.chapters).forEach(c=>{c.subject=c.subject||s.id;chapters.set(c.id,c);arr(c.topics).forEach(t=>{t.subject=t.subject||s.id;t.chapterId=c.id;t.sourceId=t.sourceId||c.sourceId;t.sourcePage=t.sourcePage||c.pageStart;topics.set(t.id,t);});});});
       data.sources.forEach(s=>sources.set(s.id,s));data.questions.forEach(q=>questions.set(q.id,q));ready=true;render();
