@@ -1,0 +1,38 @@
+Third-party components used by the offline application
+
+PDF.js 6.4.299 (iPad PWA only, legacy browser distribution)
+Copyright Mozilla Foundation and contributors. Apache License 2.0.
+The complete license is included at web/vendor/pdfjs/LICENSE in the source
+tree and vendor/pdfjs/LICENSE in the iPad deployment package. Runtime assets
+include their additional bundled license notices. Download integrity and
+version are recorded in vendor/pdfjs/version.json in the deployment package.
+Source: https://github.com/mozilla/pdf.js
+The iPad PWA does not include or execute Python, PyMuPDF, or PyInstaller.
+
+KaTeX 0.16.22
+Copyright Khan Academy and other contributors. MIT License.
+The complete license is included at _internal/web/vendor/katex/LICENSE.
+All scripts, styles and fonts are local; no CDN is used at runtime.
+Source: https://github.com/KaTeX/KaTeX/tree/v0.16.22
+
+Python 3.12.14
+Python Software Foundation License. The Windows distribution includes the
+runtime license as licenses/Python-LICENSE.txt.
+Source: https://www.python.org/downloads/source/
+
+PyMuPDF / MuPDF 1.28.2
+Copyright Artifex Software, Inc.
+Package metadata: Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License.
+This offline build uses the open source distribution.
+Source and build instructions: https://github.com/pymupdf/PyMuPDF/tree/1.28.2
+The package's license notice is included as licenses/PyMuPDF-COPYING.txt.
+Application Python and browser source are included in application-source/.
+
+PyInstaller 6.22.3
+GPL with the PyInstaller bootloader exception. The distributed program is
+not subject to GPL solely because it was packaged by PyInstaller.
+Its license text and exception are in licenses/PyInstaller-COPYING.txt.
+Source: https://github.com/pyinstaller/pyinstaller
+
+The user's reference PDFs are independent study materials; these component
+licenses do not relicense those PDFs. Their original notices remain intact.

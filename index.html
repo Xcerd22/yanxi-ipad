@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#155b53">
+  <meta name="description" content="离线使用的转博考试复习工作台：按章梳理、往年题与知识关联、间隔复习和资料溯源。">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="研习">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./ipad/icons/icon-180.png">
+  <link rel="icon" type="image/png" href="./ipad/icons/icon-192.png">
+  <title>研习 · 转博复习工作台</title>
+  <link rel="stylesheet" href="./vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="./style.css?v=1.0.4">
+  <link rel="stylesheet" href="./ipad/platform.css">
+  <script defer src="./vendor/katex/katex.min.js"></script>
+  <script defer src="./ipad/boot.js"></script>
+  <script defer src="./ipad/platform.js"></script>
+  <script defer src="./app.js?v=1.0.4"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳转到主要内容</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="主要导航">
+      <a class="brand" href="#view=dashboard" aria-label="研习，回到复习总览"><span class="brand-mark">研</span><span>研习<small>转博复习工作台</small></span></a>
+      <div class="sidebar-scroll"><div class="nav-caption">我的复习</div><nav id="main-nav"></nav><div class="nav-caption subject-caption">四门核心课程</div><nav id="subject-nav"></nav></div>
+      <div class="sidebar-footer"><span class="offline-dot"></span><div>离线学习，本地保存<small>你的进度只属于你</small></div><a href="#view=settings" aria-label="设置与备份" title="设置与备份">⚙</a></div>
+    </aside>
+    <button class="sidebar-scrim" id="sidebar-scrim" aria-label="关闭导航"></button>
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-button menu-button" id="menu-toggle" aria-label="展开导航" aria-expanded="false">☰</button>
+        <div class="breadcrumb" id="breadcrumb">复习总览</div>
+        <form class="global-search" id="search-form" role="search"><span aria-hidden="true">⌕</span><input id="search-input" type="search" placeholder="搜索知识、章节、往年题…" aria-label="搜索知识、章节、往年题"><kbd>/</kbd></form>
+        <a class="topbar-date" id="topbar-date" href="#view=settings">设置考试日期 <span>↗</span></a>
+      </header>
+      <main id="main" tabindex="-1"><div class="loading-panel"><div class="loading-spinner"></div><h1>正在打开你的复习书桌</h1><p>读取本地资料与学习进度…</p></div></main>
+      <footer class="workspace-footer"><span>研习 · 一章一题，稳步向前</span><span>内容以原始参考资料为准 · 页码均为 PDF 页序</span></footer>
+    </div>
+  </div>
+  <div id="modal-root"></div><div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

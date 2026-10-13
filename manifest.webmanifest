@@ -1,0 +1,17 @@
+{
+  "id": "./",
+  "name": "研习 · 转博复习工作台",
+  "short_name": "研习",
+  "description": "在 iPad 上离线阅读教材、知识卡片、往年题和参考答案。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f6ef",
+  "theme_color": "#155b53",
+  "icons": [
+    { "src": "./ipad/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./ipad/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
