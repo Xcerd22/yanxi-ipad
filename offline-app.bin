@@ -380,7 +380,7 @@
   <meta name="description" content="离线使用的转博考试复习工作台：按章梳理、往年题与知识关联、间隔复习和资料溯源。">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
-  <script src="./ipad/security.js" integrity="sha256-xI3ZSFJH/vPTDP5w8LulB0aHr2csMoviQ1l2o5TkgqQ=" crossorigin="anonymous"></script>
+  <script src="./ipad/security.js" integrity="sha256-am8ieqlmZWHcV0JiJIRJ2sOFlO+mKLBBPsix/HQ21Bw=" crossorigin="anonymous"></script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="研习">
@@ -390,10 +390,10 @@
   <title>研习 · 转博复习工作台</title>
   <link rel="stylesheet" href="./vendor/katex/katex.min.css" integrity="sha256-GQlRJzV+1tKf4KY6awAMkTqJ9/GWO3Zd03Fel8mFLnU=" crossorigin="anonymous">
   <link rel="stylesheet" href="./style.css?v=1.0.4" integrity="sha256-Dm+yB9XrHKXEtc2U93QwAcU7OTPfBjH701f5Y1DduUc=" crossorigin="anonymous">
-  <link rel="stylesheet" href="./ipad/platform.css" integrity="sha256-nzUTcCtRi5BVyEXcLIima5Dfa8dEmYYNAF+8aMSU/Y0=" crossorigin="anonymous">
+  <link rel="stylesheet" href="./ipad/platform.css" integrity="sha256-HFSMf7FieuCNit2BWyMAk1oViUrKWmVcRanaSVtJBVA=" crossorigin="anonymous">
   <script defer src="./vendor/katex/katex.min.js" integrity="sha256-6NiFUFlJ86X0q91d0NU2lr0Tca0m/79PMQ3Nd8jNrok=" crossorigin="anonymous"></script>
-  <script defer src="./ipad/boot.js" integrity="sha256-g4AS23C6erWoh+1A6tTi/UQVNNNE8zcMDMSxHqnhfCc=" crossorigin="anonymous"></script>
-  <script defer src="./ipad/platform.js" integrity="sha256-S4uBBCjIBegoKsqhslvAlSdqSq++QlrOGVvjxw/p0Yo=" crossorigin="anonymous"></script>
+  <script defer src="./ipad/boot.js" integrity="sha256-TezL/zBlGUNoyiLgLd+TOrpFbHmfy2AsXHlit/EZgCw=" crossorigin="anonymous"></script>
+  <script defer src="./ipad/platform.js" integrity="sha256-2uTalhm9S4fIjwgIYnLQEUksgFFpxVWwNzDqdla/fbQ=" crossorigin="anonymous"></script>
   <script defer src="./app.js?v=1.0.4" integrity="sha256-KN1RGkUY4CK8KEEvVXNlaGl0IO6MyKvrSARTh80P1go=" crossorigin="anonymous"></script>
 </head>
 <body>
@@ -426,10 +426,13 @@
   const base = typeof document !== 'undefined' && document.currentScript?.src
     ? new URL('../',document.currentScript.src).href : new URL('./',location.href).href;
   const scriptURL = new URL('sw.js',base).href;
-  let state = {ready:false,phase:'checking',message:'正在检查离线应用…',version:window.YanxiSecurity?.version || '',completed:0,total:0,bytes:0,totalBytes:0,updateAvailable:false};
-  let registration, lastInstaller, installError = '', pollTimer, pollingWorker, activationRequested = false, reloading = false;
+  let state = {ready:false,phase:'checking',message:'正在检查离线应用…',version:window.YanxiSecurity?.version || '',completed:0,total:0,bytes:0,totalBytes:0,updateAvailable:false,checkingUpdate:false,reloadRequired:false,updatePhase:'idle',updateMessage:'',updateBytes:0,updateTotalBytes:0,updateCompleted:0,updateTotal:0,updateVersion:''};
+  let registration, lastInstaller, installError = '', pollTimer, pollingWorker, activationRequested = false, reloading = false, checkingPromise, documentBuild = '';
   const watched = new Set(), waiters = new Set();
   const owns = worker => worker?.scriptURL === scriptURL;
+  const release = version => String(version || '').match(/^\d+\.\d+\.\d+/)?.[0] || String(version || '');
+  const hasWaiting = () => owns(registration?.waiting) && registration.waiting.state === 'installed';
+  const hasInstalling = () => owns(registration?.installing) && registration.installing.state === 'installing';
   function update(patch) {
     state = {...state,...patch};
     window.dispatchEvent(new CustomEvent('yanxi-offline-status',{detail:{...state}}));
@@ -455,7 +458,7 @@
     const message = typeof data.message === 'string' ? data.message.slice(0,500) : '正在准备离线应用…';
     if (data.phase === 'failed') installError = message;
     const progress = {phase:data.phase,message,completed:count('completed'),total:count('total'),bytes:count('bytes'),totalBytes:count('totalBytes')};
-    if (state.ready) update({updateMessage:message,updatePhase:data.phase});
+    if (state.ready) update({updateMessage:message,updatePhase:data.phase,updateBytes:progress.bytes,updateTotalBytes:progress.totalBytes,updateCompleted:progress.completed,updateTotal:progress.total,updateVersion:typeof data.version === 'string' ? data.version.slice(0,100) : ''});
     else update(progress);
     refresh();
   }
@@ -471,19 +474,20 @@
   }
   function refresh() {
     if (!registration) return;
-    const hasWaiting=owns(registration.waiting) && registration.waiting.state==='installed';
-    if (state.updateAvailable && !hasWaiting) update({updateAvailable:false});
+    const waiting=hasWaiting();
+    if (state.updateAvailable && !waiting && !state.reloadRequired) update({updateAvailable:false});
     for (const worker of [registration.installing,registration.waiting,registration.active]) {
       if (!owns(worker) || watched.has(worker)) continue;
       watched.add(worker); worker.addEventListener?.('statechange',refresh);
     }
     if (owns(registration.installing)) {
       lastInstaller = registration.installing; pollInstaller(lastInstaller);
-    } else if (hasWaiting) {
+    } else if (waiting) {
       lastInstaller = registration.waiting; pollInstaller(lastInstaller);
-      if (!state.updateAvailable) update({updateAvailable:true,updateMessage:'新版已完整保存，可以启用。'});
+      if (!state.updateAvailable) update({updateAvailable:true,updatePhase:'ready',updateMessage:'新版已完整保存，可以启用。'});
     }
     if (lastInstaller?.state === 'redundant' && !registration.active && !installError) installError='离线应用安装没有完成。请保持本页面在前台，点击重新检查；不需要删除图标或清除资料。';
+    if (lastInstaller?.state === 'redundant' && state.ready && !hasInstalling() && !waiting && state.updatePhase !== 'failed') update({updatePhase:'failed',updateMessage:installError || '新版未能完整下载，当前离线版本仍可使用。请联网后再次检查更新。'});
     for (const check of waiters) check();
   }
   function waitForActive() {
@@ -507,8 +511,71 @@
       workers.addEventListener('controllerchange',changed);changed();
     });
   }
+  async function inspectActiveVersion() {
+    const worker=registration?.active;
+    if (!owns(worker) || worker.state !== 'activated') return null;
+    const result=await request(worker,'YANXI_CACHE_STATUS');
+    if (worker !== registration.active) return null;
+    const reloadRequired=Boolean(result?.ready && result.version && (release(result.version) !== release(state.version) || documentBuild && result.version !== documentBuild));
+    update({activeVersion:result?.version || state.activeVersion || '',reloadRequired,updateAvailable:hasWaiting() || reloadRequired,
+      ...(reloadRequired ? {updateVersion:result.version,updatePhase:'ready',updateMessage:'新版已完整保存，点击启用新版即可刷新此窗口。'} : {})});
+    return result;
+  }
+  function updateResult(status) {
+    return {status,updateAvailable:state.updateAvailable,reloadRequired:state.reloadRequired,version:state.updateVersion || state.activeVersion || state.version,message:state.updateMessage};
+  }
+  function checkForUpdate() {
+    if (checkingPromise) return checkingPromise;
+    // Defer execution until after assigning the promise so even re-entrant UI
+    // status listeners share the same bounded network check.
+    checkingPromise=Promise.resolve().then(async()=>{
+      await ready;
+      installError='';
+      if (lastInstaller?.state === 'redundant' && !hasInstalling() && !hasWaiting()) lastInstaller=undefined;
+      update({checkingUpdate:true,updatePhase:'checking',updateMessage:'正在检查更新…'});
+      try {
+        refresh();
+        if (hasWaiting()) {
+          update({updateAvailable:true,updatePhase:'ready',updateMessage:'新版已完整保存，可以启用。'});
+          return updateResult('available');
+        }
+        const cached=await inspectActiveVersion();
+        if (state.reloadRequired) return updateResult('available');
+        if (!hasInstalling()) await bounded(Promise.resolve().then(()=>registration.update()),'检查更新超时，当前离线版本仍可使用。请稍后重试。',30000);
+        refresh();
+        if (hasWaiting()) {
+          update({updateAvailable:true,updatePhase:'ready',updateMessage:'新版已完整保存，可以启用。'});
+          return updateResult('available');
+        }
+        if (hasInstalling()) {
+          update({updatePhase:['downloading','verifying','saving'].includes(state.updatePhase) ? state.updatePhase : 'preparing',updateMessage:state.updatePhase === 'checking' ? '发现新版，正在下载；请保持页面在前台。' : state.updateMessage});
+          return updateResult('downloading');
+        }
+        if (installError || lastInstaller?.state === 'redundant') throw new Error(installError || '新版未能完整下载，当前离线版本仍可使用。请再次检查更新。');
+        const result=await inspectActiveVersion() || cached;
+        if (state.reloadRequired) return updateResult('available');
+        // State can change while the worker answers the cache query. Never
+        // overwrite a just-discovered download with an up-to-date message.
+        if (hasWaiting()) {
+          update({updateAvailable:true,updatePhase:'ready',updateMessage:'新版已完整保存，可以启用。'});
+          return updateResult('available');
+        }
+        if (hasInstalling()) {
+          update({updatePhase:['downloading','verifying','saving'].includes(state.updatePhase) ? state.updatePhase : 'preparing',updateMessage:'发现新版，正在下载；请保持页面在前台。'});
+          return updateResult('downloading');
+        }
+        if (!result?.ready) throw new Error('暂时无法确认应用缓存，请稍后重试；教材和学习记录未作更改。');
+        update({updatePhase:'current',updateMessage:`当前已是最新版本 ${release(state.version)}。`,updateVersion:state.version});
+        return updateResult('current');
+      } catch (error) {
+        update({updatePhase:'failed',updateMessage:installError ? `${installError} 当前离线版本仍可使用。` : /当前离线版本|教材和学习记录/.test(error.message) ? error.message : '暂时无法检查更新，请检查网络后重试；当前离线版本仍可使用。'});
+        return updateResult('failed');
+      } finally {update({checkingUpdate:false});}
+    }).finally(()=>{checkingPromise=undefined;});
+    return checkingPromise;
+  }
   async function activateUpdate() {
-    const worker=registration?.waiting;
+    const worker=hasWaiting() ? registration.waiting : state.reloadRequired ? registration?.active : null;
     if (!owns(worker)) throw new Error('新版还没有下载完成，请稍候。');
     activationRequested=true;
     update({updateMessage:'正在核验并启用新版…'});
@@ -535,12 +602,22 @@
     });
     workers.startMessages?.();
     workers.addEventListener('controllerchange',()=>{
-      if (owns(workers.controller) && (activationRequested || state.ready)) reload();
+      if (!owns(workers.controller)) return;
+      // activateUpdate waits for both the integrity reply and this exact
+      // worker's claim before reloading; the event alone is not sufficient.
+      if (activationRequested) return;
+      // A different window may activate the worker while this one imports
+      // materials. Offer an explicit refresh instead of interrupting it.
+      else if (state.ready) inspectActiveVersion().catch(()=>{});
     });
     registration=await bounded(workers.getRegistration(base),'无法检查离线应用注册状态，请重新打开。',20000);
     const ownsScope=registration?.scope===base && [registration.active,registration.waiting,registration.installing].some(owns);
     if (!ownsScope) registration=await bounded(workers.register(scriptURL,{scope:base,updateViaCache:'none'}),'暂时无法下载离线启动组件，请检查网络后重试。',30000);
-    registration.addEventListener?.('updatefound',()=>{installError='';refresh();});
+    registration.addEventListener?.('updatefound',()=>{
+      installError='';
+      if (state.ready) update({updatePhase:'preparing',updateMessage:'发现新版，正在下载；请保持页面在前台。',updateBytes:0,updateTotalBytes:0,updateCompleted:0,updateTotal:0,updateVersion:''});
+      refresh();
+    });
     refresh();
     if (ownsScope) {
       const updating=registration.update();
@@ -555,12 +632,15 @@
     await waitForControl();
     const result=await request(workers.controller,'YANXI_CACHE_STATUS',20000);
     if (!result?.ready) throw new Error('本机应用缓存不完整。请保持联网并重新检查；无需清除教材或学习记录。');
-    update({ready:true,phase:'ready',message:'应用已完整保存，可以离线使用',activeVersion:result.version || '',completed:result.files || 0,total:result.files || 0});
+    documentBuild=result.version || '';
+    const reloadRequired=Boolean(result.version && release(result.version) !== release(state.version));
+    update({ready:true,phase:'ready',message:'应用已完整保存，可以离线使用',activeVersion:result.version || '',completed:result.files || 0,total:result.files || 0,reloadRequired,updateAvailable:hasWaiting() || reloadRequired,
+      ...(reloadRequired ? {updateVersion:result.version,updatePhase:'ready',updateMessage:'新版已完整保存，点击启用新版即可刷新此窗口。'} : {})});
     refresh(); return result;
   }
   const ready=prepare().catch(error=>{update({ready:false,phase:'failed',message:error.message});throw error;});
   ready.catch(()=>{});
-  window.YanxiOffline=Object.freeze({ready,status:()=>({...state}),activateUpdate});
+  window.YanxiOffline=Object.freeze({ready,status:()=>({...state}),checkForUpdate,activateUpdate});
 })();
 �PNG
 
@@ -687,6 +767,10 @@ w  4�-�U,>�y�>���=��x��_7�{ׇ��UQ`��� �����]�.����\�D>*��=�Z��:oy���
 .ipad-offline-panel>p{font-size:12px}
 .ipad-update-banner{margin:18px 34px 0;padding:14px 18px;border:1px solid var(--line);border-radius:12px;background:var(--green-light);display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:14px;line-height:1.7}
 .ipad-update-banner .btn{flex-shrink:0}.ipad-update-banner .btn[hidden]{display:none}
+.ipad-app-update{grid-column:1/-1}
+.ipad-app-update .ipad-update-status{font-size:13px;line-height:1.8;color:var(--green);margin:16px 0}
+.ipad-update-actions{display:flex;flex-wrap:wrap;gap:12px}
+.ipad-update-actions .btn{min-height:44px}.ipad-update-actions .btn[hidden]{display:none}
 @media(max-width:600px){.ipad-update-banner{margin:12px 14px 0;align-items:flex-start;flex-direction:column}}
 .is-error{color:#a54432!important}
 .page-image-wrap .ipad-pdf-canvas{display:block;max-width:100%;height:auto;margin:0 auto;box-shadow:0 3px 18px #2945221a;background:#fff}
@@ -716,6 +800,7 @@ w  4�-�U,>�y�>���=��x��_7�{ׇ��UQ`��� �����]�.����\�D>*��=�Z��:oy���
   const bytes = size => size >= 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(2)} GB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
   const nextFrame = () => new Promise(resolve => setTimeout(resolve, 0));
   let dbPromise, active = null, sourceMap = new Map(), importBusy = false, initializing = false, startupWaiting = false;
+  let updateActionBusy = false, updateActionError = '';
   let pdfModule, documentSlot, pdfReadSlot, renderTask, renderEpoch = 0;
   const pdfUrls = new Map();
   const pdfUrlPending = new Map();
@@ -943,6 +1028,7 @@ w  4�-�U,>�y�>���=��x��_7�{ׇ��UQ`��� �����]�.����\�D>*��=�Z��:oy���
 
   async function importBundle(file, onProgress = () => {}) {
     assertCapabilities();
+    if (updateActionBusy) throw new Error('应用正在检查或启用更新，请稍后再导入资料。');
     if (importBusy) throw new Error('资料正在导入，请等待当前导入完成。');
     if (!window.YanxiOffline?.ready) throw new Error('离线应用尚未准备好，请联网重新打开安装页。');
     importBusy = true;
@@ -1009,19 +1095,24 @@ w  4�-�U,>�y�>���=��x��_7�{ׇ��UQ`��� �����]�.����\�D>*��=�Z��:oy���
     // disable it in Files. The header and full manifest are validated instead.
     block.innerHTML = `<input class="sr-only" type="file" aria-label="选择 .yanxi 研习离线资料包"><button class="btn ${initial?'btn-primary':'btn-light'}" type="button">${initial?'选择资料包，开始导入':'更新或重新导入资料包'}</button><div class="ipad-import-status" role="status" aria-live="polite"></div><progress class="ipad-import-progress" max="100" value="0" hidden aria-label="资料导入进度"></progress>`;
     const input = block.querySelector('input'), button = block.querySelector('button'), status = block.querySelector('[role=status]'), bar = block.querySelector('progress');
-    button.addEventListener('click', () => input.click());
+    input.disabled=updateActionBusy;button.disabled=updateActionBusy;
+    button.addEventListener('click', () => {
+      if (updateActionBusy) { status.textContent='应用正在检查或启用更新，请稍后再导入资料。';return; }
+      input.click();
+    });
     input.addEventListener('change', async () => {
       const file = input.files?.[0]; if (!file) return;
+      if (updateActionBusy) { input.value='';status.textContent='应用正在检查或启用更新，请稍后再导入资料。';return; }
       button.disabled = true; bar.hidden = false; status.classList.remove('is-error');
       const beforeUnload = event => { event.preventDefault(); event.returnValue = ''; };
       window.addEventListener('beforeunload', beforeUnload);
       try {
-        await importBundle(file, item => { status.textContent = item.message; if (item.total) bar.value = Math.round(100 * item.completed / item.total); else bar.removeAttribute('value'); });
+        await importBundle(file, item => { status.textContent = item.message; if (item.total) bar.value = Math.round(100 * item.completed / item.total); else bar.removeAttribute('value'); updateOfflineUI(); });
         status.textContent = '导入完成，正在打开复习书桌…';
         window.removeEventListener('beforeunload', beforeUnload);
         location.reload();
       } catch (error) { status.textContent = friendlyError(error); status.classList.add('is-error'); bar.hidden = true; }
-      finally { window.removeEventListener('beforeunload', beforeUnload); button.disabled = false; input.value = ''; }
+      finally { window.removeEventListener('beforeunload', beforeUnload); button.disabled = false; input.value = ''; updateOfflineUI(); }
     });
     return block;
   }
@@ -1038,8 +1129,25 @@ w  4�-�U,>�y�>���=��x��_7�{ׇ��UQ`��� �����]�.����\�D>*��=�Z��:oy���
     }
   }
 
+  async function runUpdateAction(action) {
+    if (updateActionBusy) return;
+    if (importBusy) { updateActionError='请等待资料导入完成后再更新应用。';updateOfflineUI();return; }
+    updateActionBusy=true;updateActionError='';updateOfflineUI();
+    try { await window.YanxiOffline[action](); }
+    catch (error) { updateActionError=friendlyError(error); }
+    finally { updateActionBusy=false;updateOfflineUI(); }
+  }
+  function mountUpdatePanel(grid) {
+    if (document.querySelector('#ipad-app-update')) return;
+    const panel=document.createElement('section');panel.id='ipad-app-update';panel.className='panel settings-panel ipad-app-update';
+    panel.innerHTML=`<div class="ipad-panel-heading"><h2>应用更新</h2><span class="tag green">当前版本 ${esc(window.YanxiSecurity?.version || '')}</span></div><p>更新程序会保留本机教材、笔记和学习进度。</p><p class="ipad-update-status" role="status" aria-live="polite"></p><div class="ipad-update-actions"><button class="btn btn-primary" type="button" data-update-action="check">检查更新</button><button class="btn btn-light" type="button" data-update-action="activate" hidden>启用新版</button></div><progress class="ipad-import-progress" max="100" hidden aria-label="应用更新进度"></progress>`;
+    panel.querySelector('[data-update-action=check]').addEventListener('click',()=>runUpdateAction('checkForUpdate'));
+    panel.querySelector('[data-update-action=activate]').addEventListener('click',()=>runUpdateAction('activateUpdate'));
+    grid.prepend(panel);updateOfflineUI();
+  }
   function updateOfflineUI() {
     const status=window.YanxiOffline?.status?.(); if (!status) return;
+    for (const control of document.querySelectorAll('.ipad-import-control button,.ipad-import-control input')) control.disabled=updateActionBusy || importBusy;
     if (startupWaiting) {
       const message=document.querySelector('#ipad-install-message'), bar=document.querySelector('#ipad-install-progress');
       if (message) message.textContent=status.message+(status.phase==='downloading' && status.totalBytes>0 ? ` ${Math.min(100,Math.floor(100*status.bytes/status.totalBytes))}%` : '');
@@ -1051,23 +1159,37 @@ w  4�-�U,>�y�>���=��x��_7�{ׇ��UQ`��� �����]�.����\�D>*��=�Z��:oy���
       }
       return;
     }
+    const panel=document.querySelector('#ipad-app-update');
+    const canActivate=status.updateAvailable || status.reloadRequired;
+    const downloading=['preparing','downloading','verifying','saving'].includes(status.updatePhase);
+    let message=updateActionError || status.updateMessage || (canActivate?'新版已完整保存，可以启用。':'点击检查是否有新版本；断网时仍可继续使用已保存的应用。');
+    if (!updateActionError && status.updatePhase==='downloading' && status.updateTotalBytes>0) message+=` ${Math.min(100,Math.floor(100*status.updateBytes/status.updateTotalBytes))}%`;
+    if (panel) {
+      const label=panel.querySelector('.ipad-update-status'),check=panel.querySelector('[data-update-action=check]'),activate=panel.querySelector('[data-update-action=activate]'),bar=panel.querySelector('progress');
+      label.textContent=importBusy?'资料正在导入，完成后可以更新应用。':message;
+      label.classList.toggle('is-error',Boolean(updateActionError) || status.updatePhase==='failed');
+      check.textContent=status.checkingUpdate?'正在检查…':downloading?'正在下载更新…':'检查更新';
+      check.disabled=updateActionBusy || Boolean(status.checkingUpdate) || downloading || importBusy;
+      activate.hidden=!canActivate;activate.disabled=updateActionBusy || importBusy;
+      activate.textContent=status.reloadRequired?'重新打开新版':'启用新版';
+      bar.hidden=!downloading;
+      const total=status.updatePhase==='downloading'?status.updateTotalBytes:status.updateTotal;
+      const completed=status.updatePhase==='downloading'?status.updateBytes:status.updateCompleted;
+      if (total>0) bar.value=Math.max(0,Math.min(100,100*completed/total));else bar.removeAttribute('value');
+    }
     let banner=document.querySelector('#ipad-update-banner');
-    const visible=status.ready && (status.updateAvailable || ['downloading','verifying','saving'].includes(status.updatePhase));
+    const visible=status.ready && (canActivate || downloading) && !panel;
     if (!visible) {banner?.remove();return;}
     if (!banner) {
       banner=document.createElement('aside');banner.id='ipad-update-banner';banner.className='ipad-update-banner';banner.setAttribute('aria-label','应用更新');
       const message=document.createElement('span');message.setAttribute('role','status');
       const button=document.createElement('button');button.className='btn btn-primary btn-small';button.textContent='启用新版';
-      button.addEventListener('click',async()=>{
-        if(importBusy){message.textContent='请等待资料导入完成后再启用新版。';return;}
-        button.disabled=true;
-        try {await window.YanxiOffline.activateUpdate();}
-        catch(error){message.textContent=friendlyError(error);button.disabled=false;}
-      });
+      button.addEventListener('click',()=>runUpdateAction('activateUpdate'));
       banner.append(message,button);document.querySelector('#main')?.before(banner);
     }
-    banner.querySelector('span').textContent=status.updateMessage || '新版已完整保存，可以启用。';
-    banner.querySelector('button').hidden=!status.updateAvailable;
+    banner.querySelector('span').textContent=message;
+    const activate=banner.querySelector('button');activate.hidden=!canActivate;activate.disabled=updateActionBusy || importBusy;
+    activate.textContent=status.reloadRequired?'重新打开新版':'启用新版';
   }
   function mountStartup() {
     const main=document.querySelector('#main'); if(!main)return;
@@ -1223,7 +1345,9 @@ w  4�-�U,>�y�>���=��x��_7�{ׇ��UQ`��� �����]�.����\�D>*��=�Z��:oy���
     document.body.classList.remove('ipad-onboarding');
     updateOfflineUI();
     if (route.view !== 'settings') return;
-    const grid = document.querySelector('#main .settings-grid'); if (!grid || document.querySelector('#ipad-offline-panel')) return;
+    const grid = document.querySelector('#main .settings-grid'); if (!grid) return;
+    mountUpdatePanel(grid);
+    if (document.querySelector('#ipad-offline-panel')) return;
     const panel = document.createElement('section'); panel.id = 'ipad-offline-panel'; panel.className = 'panel settings-panel ipad-offline-panel';
     panel.innerHTML = `<div class="ipad-panel-heading"><h2>此 iPad 的离线资料</h2><span class="tag green">本机保存</span></div><div class="ipad-library-stats">${active?.files || 0} 份资料 · ${active?.appData.questions.length || 0} 道题目 · ${bytes(active?.bytes || 0)}</div><p class="ipad-offline-ready" role="status">正在检查离线应用…</p><div class="ipad-storage-details"></div><p>更新资料包会替换教材与题库，保留已有的笔记、收藏和复习进度。请保留原 .yanxi 文件，以便需要时重新导入。</p><div class="ipad-settings-import"></div><p class="ipad-storage-note">删除应用、清理网站数据或系统回收存储时，本机内容可能被清除。请定期使用上方“导出学习备份”，将记录保存到“文件”App。</p>`;
     panel.querySelector('.ipad-settings-import').append(importControl()); grid.append(panel);
@@ -1248,7 +1372,7 @@ w  4�-�U,>�y�>���=��x��_7�{ׇ��UQ`��� �����]�.����\�D>*��=�Z��:oy���
     if (!allowed || window.top !== window.self) throw new Error(message);
   };
   Object.defineProperty(window, 'YanxiSecurity', {
-    value:Object.freeze({allowed, assertTopLevel, version:'1.0.3'}),
+    value:Object.freeze({allowed, assertTopLevel, version:'1.0.4'}),
     writable:false, configurable:false
   });
   if (allowed) return;

@@ -19,6 +19,7 @@
   const bytes = size => size >= 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(2)} GB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
   const nextFrame = () => new Promise(resolve => setTimeout(resolve, 0));
   let dbPromise, active = null, sourceMap = new Map(), importBusy = false, initializing = false, startupWaiting = false;
+  let updateActionBusy = false, updateActionError = '';
   let pdfModule, documentSlot, pdfReadSlot, renderTask, renderEpoch = 0;
   const pdfUrls = new Map();
   const pdfUrlPending = new Map();
@@ -246,6 +247,7 @@
 
   async function importBundle(file, onProgress = () => {}) {
     assertCapabilities();
+    if (updateActionBusy) throw new Error('应用正在检查或启用更新，请稍后再导入资料。');
     if (importBusy) throw new Error('资料正在导入，请等待当前导入完成。');
     if (!window.YanxiOffline?.ready) throw new Error('离线应用尚未准备好，请联网重新打开安装页。');
     importBusy = true;
@@ -312,19 +314,24 @@
     // disable it in Files. The header and full manifest are validated instead.
     block.innerHTML = `<input class="sr-only" type="file" aria-label="选择 .yanxi 研习离线资料包"><button class="btn ${initial?'btn-primary':'btn-light'}" type="button">${initial?'选择资料包，开始导入':'更新或重新导入资料包'}</button><div class="ipad-import-status" role="status" aria-live="polite"></div><progress class="ipad-import-progress" max="100" value="0" hidden aria-label="资料导入进度"></progress>`;
     const input = block.querySelector('input'), button = block.querySelector('button'), status = block.querySelector('[role=status]'), bar = block.querySelector('progress');
-    button.addEventListener('click', () => input.click());
+    input.disabled=updateActionBusy;button.disabled=updateActionBusy;
+    button.addEventListener('click', () => {
+      if (updateActionBusy) { status.textContent='应用正在检查或启用更新，请稍后再导入资料。';return; }
+      input.click();
+    });
     input.addEventListener('change', async () => {
       const file = input.files?.[0]; if (!file) return;
+      if (updateActionBusy) { input.value='';status.textContent='应用正在检查或启用更新，请稍后再导入资料。';return; }
       button.disabled = true; bar.hidden = false; status.classList.remove('is-error');
       const beforeUnload = event => { event.preventDefault(); event.returnValue = ''; };
       window.addEventListener('beforeunload', beforeUnload);
       try {
-        await importBundle(file, item => { status.textContent = item.message; if (item.total) bar.value = Math.round(100 * item.completed / item.total); else bar.removeAttribute('value'); });
+        await importBundle(file, item => { status.textContent = item.message; if (item.total) bar.value = Math.round(100 * item.completed / item.total); else bar.removeAttribute('value'); updateOfflineUI(); });
         status.textContent = '导入完成，正在打开复习书桌…';
         window.removeEventListener('beforeunload', beforeUnload);
         location.reload();
       } catch (error) { status.textContent = friendlyError(error); status.classList.add('is-error'); bar.hidden = true; }
-      finally { window.removeEventListener('beforeunload', beforeUnload); button.disabled = false; input.value = ''; }
+      finally { window.removeEventListener('beforeunload', beforeUnload); button.disabled = false; input.value = ''; updateOfflineUI(); }
     });
     return block;
   }
@@ -341,8 +348,25 @@
     }
   }
 
+  async function runUpdateAction(action) {
+    if (updateActionBusy) return;
+    if (importBusy) { updateActionError='请等待资料导入完成后再更新应用。';updateOfflineUI();return; }
+    updateActionBusy=true;updateActionError='';updateOfflineUI();
+    try { await window.YanxiOffline[action](); }
+    catch (error) { updateActionError=friendlyError(error); }
+    finally { updateActionBusy=false;updateOfflineUI(); }
+  }
+  function mountUpdatePanel(grid) {
+    if (document.querySelector('#ipad-app-update')) return;
+    const panel=document.createElement('section');panel.id='ipad-app-update';panel.className='panel settings-panel ipad-app-update';
+    panel.innerHTML=`<div class="ipad-panel-heading"><h2>应用更新</h2><span class="tag green">当前版本 ${esc(window.YanxiSecurity?.version || '')}</span></div><p>更新程序会保留本机教材、笔记和学习进度。</p><p class="ipad-update-status" role="status" aria-live="polite"></p><div class="ipad-update-actions"><button class="btn btn-primary" type="button" data-update-action="check">检查更新</button><button class="btn btn-light" type="button" data-update-action="activate" hidden>启用新版</button></div><progress class="ipad-import-progress" max="100" hidden aria-label="应用更新进度"></progress>`;
+    panel.querySelector('[data-update-action=check]').addEventListener('click',()=>runUpdateAction('checkForUpdate'));
+    panel.querySelector('[data-update-action=activate]').addEventListener('click',()=>runUpdateAction('activateUpdate'));
+    grid.prepend(panel);updateOfflineUI();
+  }
   function updateOfflineUI() {
     const status=window.YanxiOffline?.status?.(); if (!status) return;
+    for (const control of document.querySelectorAll('.ipad-import-control button,.ipad-import-control input')) control.disabled=updateActionBusy || importBusy;
     if (startupWaiting) {
       const message=document.querySelector('#ipad-install-message'), bar=document.querySelector('#ipad-install-progress');
       if (message) message.textContent=status.message+(status.phase==='downloading' && status.totalBytes>0 ? ` ${Math.min(100,Math.floor(100*status.bytes/status.totalBytes))}%` : '');
@@ -354,23 +378,37 @@
       }
       return;
     }
+    const panel=document.querySelector('#ipad-app-update');
+    const canActivate=status.updateAvailable || status.reloadRequired;
+    const downloading=['preparing','downloading','verifying','saving'].includes(status.updatePhase);
+    let message=updateActionError || status.updateMessage || (canActivate?'新版已完整保存，可以启用。':'点击检查是否有新版本；断网时仍可继续使用已保存的应用。');
+    if (!updateActionError && status.updatePhase==='downloading' && status.updateTotalBytes>0) message+=` ${Math.min(100,Math.floor(100*status.updateBytes/status.updateTotalBytes))}%`;
+    if (panel) {
+      const label=panel.querySelector('.ipad-update-status'),check=panel.querySelector('[data-update-action=check]'),activate=panel.querySelector('[data-update-action=activate]'),bar=panel.querySelector('progress');
+      label.textContent=importBusy?'资料正在导入，完成后可以更新应用。':message;
+      label.classList.toggle('is-error',Boolean(updateActionError) || status.updatePhase==='failed');
+      check.textContent=status.checkingUpdate?'正在检查…':downloading?'正在下载更新…':'检查更新';
+      check.disabled=updateActionBusy || Boolean(status.checkingUpdate) || downloading || importBusy;
+      activate.hidden=!canActivate;activate.disabled=updateActionBusy || importBusy;
+      activate.textContent=status.reloadRequired?'重新打开新版':'启用新版';
+      bar.hidden=!downloading;
+      const total=status.updatePhase==='downloading'?status.updateTotalBytes:status.updateTotal;
+      const completed=status.updatePhase==='downloading'?status.updateBytes:status.updateCompleted;
+      if (total>0) bar.value=Math.max(0,Math.min(100,100*completed/total));else bar.removeAttribute('value');
+    }
     let banner=document.querySelector('#ipad-update-banner');
-    const visible=status.ready && (status.updateAvailable || ['downloading','verifying','saving'].includes(status.updatePhase));
+    const visible=status.ready && (canActivate || downloading) && !panel;
     if (!visible) {banner?.remove();return;}
     if (!banner) {
       banner=document.createElement('aside');banner.id='ipad-update-banner';banner.className='ipad-update-banner';banner.setAttribute('aria-label','应用更新');
       const message=document.createElement('span');message.setAttribute('role','status');
       const button=document.createElement('button');button.className='btn btn-primary btn-small';button.textContent='启用新版';
-      button.addEventListener('click',async()=>{
-        if(importBusy){message.textContent='请等待资料导入完成后再启用新版。';return;}
-        button.disabled=true;
-        try {await window.YanxiOffline.activateUpdate();}
-        catch(error){message.textContent=friendlyError(error);button.disabled=false;}
-      });
+      button.addEventListener('click',()=>runUpdateAction('activateUpdate'));
       banner.append(message,button);document.querySelector('#main')?.before(banner);
     }
-    banner.querySelector('span').textContent=status.updateMessage || '新版已完整保存，可以启用。';
-    banner.querySelector('button').hidden=!status.updateAvailable;
+    banner.querySelector('span').textContent=message;
+    const activate=banner.querySelector('button');activate.hidden=!canActivate;activate.disabled=updateActionBusy || importBusy;
+    activate.textContent=status.reloadRequired?'重新打开新版':'启用新版';
   }
   function mountStartup() {
     const main=document.querySelector('#main'); if(!main)return;
@@ -526,7 +564,9 @@
     document.body.classList.remove('ipad-onboarding');
     updateOfflineUI();
     if (route.view !== 'settings') return;
-    const grid = document.querySelector('#main .settings-grid'); if (!grid || document.querySelector('#ipad-offline-panel')) return;
+    const grid = document.querySelector('#main .settings-grid'); if (!grid) return;
+    mountUpdatePanel(grid);
+    if (document.querySelector('#ipad-offline-panel')) return;
     const panel = document.createElement('section'); panel.id = 'ipad-offline-panel'; panel.className = 'panel settings-panel ipad-offline-panel';
     panel.innerHTML = `<div class="ipad-panel-heading"><h2>此 iPad 的离线资料</h2><span class="tag green">本机保存</span></div><div class="ipad-library-stats">${active?.files || 0} 份资料 · ${active?.appData.questions.length || 0} 道题目 · ${bytes(active?.bytes || 0)}</div><p class="ipad-offline-ready" role="status">正在检查离线应用…</p><div class="ipad-storage-details"></div><p>更新资料包会替换教材与题库，保留已有的笔记、收藏和复习进度。请保留原 .yanxi 文件，以便需要时重新导入。</p><div class="ipad-settings-import"></div><p class="ipad-storage-note">删除应用、清理网站数据或系统回收存储时，本机内容可能被清除。请定期使用上方“导出学习备份”，将记录保存到“文件”App。</p>`;
     panel.querySelector('.ipad-settings-import').append(importControl()); grid.append(panel);
