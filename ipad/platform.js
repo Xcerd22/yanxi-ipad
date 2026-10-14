@@ -18,7 +18,7 @@
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const bytes = size => size >= 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(2)} GB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
   const nextFrame = () => new Promise(resolve => setTimeout(resolve, 0));
-  let dbPromise, active = null, sourceMap = new Map(), importBusy = false, initializing = false;
+  let dbPromise, active = null, sourceMap = new Map(), importBusy = false, initializing = false, startupWaiting = false;
   let pdfModule, documentSlot, pdfReadSlot, renderTask, renderEpoch = 0;
   const pdfUrls = new Map();
   const pdfUrlPending = new Map();
@@ -341,20 +341,61 @@
     }
   }
 
+  function updateOfflineUI() {
+    const status=window.YanxiOffline?.status?.(); if (!status) return;
+    if (startupWaiting) {
+      const message=document.querySelector('#ipad-install-message'), bar=document.querySelector('#ipad-install-progress');
+      if (message) message.textContent=status.message+(status.phase==='downloading' && status.totalBytes>0 ? ` ${Math.min(100,Math.floor(100*status.bytes/status.totalBytes))}%` : '');
+      if (bar) {
+        const total=status.phase==='downloading'?status.totalBytes:status.total;
+        const completed=status.phase==='downloading'?status.bytes:status.completed;
+        if (total>0) bar.value=Math.max(0,Math.min(100,100*completed/total));
+        else bar.removeAttribute('value');
+      }
+      return;
+    }
+    let banner=document.querySelector('#ipad-update-banner');
+    const visible=status.ready && (status.updateAvailable || ['downloading','verifying','saving'].includes(status.updatePhase));
+    if (!visible) {banner?.remove();return;}
+    if (!banner) {
+      banner=document.createElement('aside');banner.id='ipad-update-banner';banner.className='ipad-update-banner';banner.setAttribute('aria-label','应用更新');
+      const message=document.createElement('span');message.setAttribute('role','status');
+      const button=document.createElement('button');button.className='btn btn-primary btn-small';button.textContent='启用新版';
+      button.addEventListener('click',async()=>{
+        if(importBusy){message.textContent='请等待资料导入完成后再启用新版。';return;}
+        button.disabled=true;
+        try {await window.YanxiOffline.activateUpdate();}
+        catch(error){message.textContent=friendlyError(error);button.disabled=false;}
+      });
+      banner.append(message,button);document.querySelector('#main')?.before(banner);
+    }
+    banner.querySelector('span').textContent=status.updateMessage || '新版已完整保存，可以启用。';
+    banner.querySelector('button').hidden=!status.updateAvailable;
+  }
+  function mountStartup() {
+    const main=document.querySelector('#main'); if(!main)return;
+    document.body.classList.add('ipad-onboarding');
+    main.innerHTML=`<section class="ipad-welcome"><div class="eyebrow">YOUR OFFLINE STUDY DESK</div><span class="ipad-welcome-mark" aria-hidden="true">研</span><h1>正在准备离线应用</h1><p class="ipad-welcome-lead">首次打开需要保存程序、字体和阅读组件。请保持本页面在前台，完成后即可导入资料、断网复习。</p><p id="ipad-install-message" class="ipad-onboarding-state" role="status" aria-live="polite">正在检查应用…</p><progress id="ipad-install-progress" class="ipad-import-progress" max="100" aria-label="离线应用安装进度"></progress><p class="ipad-storage-note">这里只下载应用，不上传教材或学习记录。${window.YanxiSecurity?.version?`应用 ${esc(window.YanxiSecurity.version)}`:''}</p></section>`;
+    updateOfflineUI();
+  }
+  window.addEventListener('yanxi-offline-status',updateOfflineUI);
+
   async function initialize() {
     if (initializing) return null; initializing = true;
     try {
       assertCapabilities();
       if (!window.YanxiOffline?.ready) throw new Error('离线应用尚未启动，请联网重新打开此页面。');
+      startupWaiting=true;mountStartup();
       // Verify the controlling application worker before exposing imported
       // material, including on subsequent offline launches with an active DB.
       await window.YanxiOffline.ready;
+      startupWaiting=false;
       setActive(await readActive());
       if (active) { document.body.classList.remove('ipad-onboarding'); return active.appData; }
       const version = window.YanxiSecurity?.version;
       mountWelcome(`离线应用已准备好，现在可以导入资料包。${version ? `（应用 ${version}）` : ''}`, true);
     } catch (error) { mountWelcome(friendlyError(error)); }
-    finally { initializing = false; }
+    finally { initializing = false;startupWaiting=false;updateOfflineUI(); }
     return null;
   }
 
@@ -483,6 +524,7 @@
   }
   function afterRender(data, route) {
     document.body.classList.remove('ipad-onboarding');
+    updateOfflineUI();
     if (route.view !== 'settings') return;
     const grid = document.querySelector('#main .settings-grid'); if (!grid || document.querySelector('#ipad-offline-panel')) return;
     const panel = document.createElement('section'); panel.id = 'ipad-offline-panel'; panel.className = 'panel settings-panel ipad-offline-panel';

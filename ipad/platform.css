@@ -29,6 +29,9 @@
 .ipad-storage-details{font-size:11px;color:var(--muted);margin-bottom:18px}
 .ipad-offline-panel .ipad-storage-note{margin:18px 0 0}
 .ipad-offline-panel>p{font-size:12px}
+.ipad-update-banner{margin:18px 34px 0;padding:14px 18px;border:1px solid var(--line);border-radius:12px;background:var(--green-light);display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:14px;line-height:1.7}
+.ipad-update-banner .btn{flex-shrink:0}.ipad-update-banner .btn[hidden]{display:none}
+@media(max-width:600px){.ipad-update-banner{margin:12px 14px 0;align-items:flex-start;flex-direction:column}}
 .is-error{color:#a54432!important}
 .page-image-wrap .ipad-pdf-canvas{display:block;max-width:100%;height:auto;margin:0 auto;box-shadow:0 3px 18px #2945221a;background:#fff}
 .page-image-wrap.zoomed .ipad-pdf-canvas{max-width:none;width:1400px}
