@@ -8,7 +8,7 @@
     if (!allowed || window.top !== window.self) throw new Error(message);
   };
   Object.defineProperty(window, 'YanxiSecurity', {
-    value:Object.freeze({allowed, assertTopLevel, version:'1.0.1'}),
+    value:Object.freeze({allowed, assertTopLevel, version:'1.0.2'}),
     writable:false, configurable:false
   });
   if (allowed) return;

@@ -19,8 +19,9 @@
   const bytes = size => size >= 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(2)} GB` : `${(size / 1024 ** 2).toFixed(1)} MB`;
   const nextFrame = () => new Promise(resolve => setTimeout(resolve, 0));
   let dbPromise, active = null, sourceMap = new Map(), importBusy = false, initializing = false;
-  let pdfModule, documentSlot, renderTask, renderEpoch = 0;
+  let pdfModule, documentSlot, pdfReadSlot, renderTask, renderEpoch = 0;
   const pdfUrls = new Map();
+  const pdfUrlPending = new Map();
 
   function isIPad() { return /iPad/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1); }
   function isStandalone() { return navigator.standalone === true || window.matchMedia?.('(display-mode: standalone)').matches; }
@@ -235,11 +236,12 @@
 
   async function verifyPdf(blob, entry) {
     if (!(blob instanceof Blob) || blob.size < 5 || blob.size > MAX_PDF || blob.size !== entry.size) throw new Error('PDF 文件大小无效或超过 128 MB。');
-    let buffer = await blob.arrayBuffer();
+    const buffer = await blob.arrayBuffer();
+    if (buffer.byteLength !== entry.size) throw new Error('PDF 实际内容大小与目录不一致。');
     if (new TextDecoder().decode(new Uint8Array(buffer, 0, 5)) !== '%PDF-') throw new Error(`“${entry.path}”不是有效的 PDF 文件。`);
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)), value => value.toString(16).padStart(2, '0')).join('');
-    buffer = null;
     if (hash !== entry.sha256) throw new Error(`“${entry.path}”校验失败。请重新复制完整资料包后再试。`);
+    return buffer;
   }
 
   async function importBundle(file, onProgress = () => {}) {
@@ -265,10 +267,14 @@
       for (let index = 0; index < total; index++) {
         const entry = manifest.files[index];
         notify({phase:'copying', completed:index, total, bytes:copied, totalBytes:file.size - bodyOffset, message:`校验并保存 ${index + 1} / ${total}：${manifest.appData.sources.find(s => s.id === entry.sourceId).title}`});
-        const blob = file.slice(bodyOffset + entry.offset, bodyOffset + entry.offset + entry.size, 'application/pdf');
-        await verifyPdf(blob, entry);
+        // Persist independent bytes rather than a file-backed slice of the
+        // shared archive. Verify the committed record as well as the input.
+        let buffer = await verifyPdf(file.slice(bodyOffset + entry.offset, bodyOffset + entry.offset + entry.size, 'application/pdf'), entry);
+        let blob = new Blob([buffer], {type:'application/pdf'}); buffer = null;
         await claimImport(id);
         await transaction(['pdfs'], 'readwrite', tx => tx.objectStore('pdfs').put({generation:id, sourceId:entry.sourceId, blob}));
+        blob = null;
+        await readStoredPdf(id, entry.sourceId, {bytes:entry.size, sha256:entry.sha256, path:entry.path, title:entry.path}, false);
         copied += entry.size;
         await nextFrame();
       }
@@ -370,18 +376,42 @@
     return {results:found.slice(0,80), truncated:found.length > 80, note:'搜索本地 PDF 文本层；扫描版请搜索已整理知识卡或浏览页图。'};
   }
 
-  async function readPdf(id) {
-    if (!active || !sourceMap.has(id)) throw new Error('这份资料尚未导入，请到设置中重新导入资料包。');
+  async function readStoredPdf(generation, id, source, snapshot = true) {
     const blob = await transaction(['pdfs'], 'readonly', (tx, done) => {
-      const request = tx.objectStore('pdfs').get([active.id,id]); request.onsuccess = () => done(request.result?.blob);
+      const request = tx.objectStore('pdfs').get([generation,id]); request.onsuccess = () => done(request.result?.blob);
     });
     if (!(blob instanceof Blob)) throw new Error('这份资料已不在本机存储中。如果刚在其他页面更新了资料，请重新打开本应用；否则请重新导入资料包。');
-    if (blob.size < 5 || blob.size > MAX_PDF) throw new Error('这份 PDF 的大小超过本机读取限制，请重新导入配套资料包。');
-    return blob;
+    try {
+      const buffer = await verifyPdf(blob, {size:source.bytes, sha256:source.sha256, path:source.path});
+      // Use the verified snapshot for both preview and full-PDF viewing, never
+      // a second read of the persisted Blob after checking its identity.
+      return snapshot ? new Blob([buffer], {type:'application/pdf'}) : undefined;
+    } catch (_) {
+      throw new Error(`本机保存的“${source.title}”与教材目录不一致，已停止显示以免读到其他教材。请在“设置与备份”重新导入原 .yanxi 资料包修复；无需删除应用，笔记和进度会保留。`);
+    }
+  }
+  async function readPdf(id) {
+    if (!active || !sourceMap.has(id)) throw new Error('这份资料尚未导入，请到设置中重新导入资料包。');
+    const generation = active.id, source = sourceMap.get(id);
+    if (pdfReadSlot?.generation === generation && pdfReadSlot.id === id) return pdfReadSlot.promise;
+    const slot = {generation,id}; pdfReadSlot = slot;
+    slot.promise = readStoredPdf(generation,id,source).then(blob => {
+      if (active?.id !== generation || pdfReadSlot !== slot) throw new DOMException('Page changed','AbortError');
+      return blob;
+    });
+    slot.promise.catch(() => { if (pdfReadSlot === slot) pdfReadSlot = undefined; });
+    return slot.promise;
   }
   async function pdfUrl(id) {
-    if (!pdfUrls.has(id)) pdfUrls.set(id, URL.createObjectURL(await readPdf(id)));
-    return pdfUrls.get(id);
+    if (pdfUrls.has(id)) return pdfUrls.get(id);
+    if (pdfUrlPending.has(id)) return pdfUrlPending.get(id);
+    const generation = active?.id;
+    const pending = readPdf(id).then(blob => {
+      if (active?.id !== generation || pdfUrlPending.get(id) !== pending) throw new DOMException('Page changed','AbortError');
+      const url = URL.createObjectURL(blob); pdfUrls.set(id,url); return url;
+    }).finally(() => { if (pdfUrlPending.get(id) === pending) pdfUrlPending.delete(id); });
+    pdfUrlPending.set(id,pending);
+    return pending;
   }
   function stopRenderTask() { if (renderTask) { try { renderTask.cancel(); } catch (_) {} renderTask = null; } }
   function clearDocument() {
@@ -390,6 +420,7 @@
   }
   function cancelRender() {
     renderEpoch++; stopRenderTask(); clearDocument();
+    pdfReadSlot = undefined; pdfUrlPending.clear();
     for (const url of pdfUrls.values()) URL.revokeObjectURL(url);
     pdfUrls.clear();
   }
@@ -407,6 +438,7 @@
       slot.loading = pdfjs.getDocument({data:new Uint8Array(buffer), cMapUrl:new URL('cmaps/',PDF_BASE).href, cMapPacked:true, standardFontDataUrl:new URL('standard_fonts/',PDF_BASE).href, wasmUrl:new URL('wasm/',PDF_BASE).href, iccUrl:new URL('iccs/',PDF_BASE).href, isEvalSupported:false, isOffscreenCanvasSupported:false, isImageDecoderSupported:false, useSystemFonts:true, canvasMaxAreaInBytes:MAX_PIXELS * 4});
       const pdf = await slot.loading.promise;
       if (!Number.isInteger(pdf.numPages) || pdf.numPages < 1 || pdf.numPages > MAX_PDF_PAGES) throw new Error('PDF 页数超出本机读取限制。');
+      if (pdf.numPages !== sourceMap.get(id)?.pages) throw new Error('本机 PDF 的页数与教材目录不一致，请在设置中重新导入原资料包。');
       return pdf;
     })();
     slot.promise.catch(() => { if (documentSlot === slot) clearDocument(); });
