@@ -168,6 +168,11 @@
         if (chapters.size > LIMITS.chapters) error('章节数量超过本机读取限制');
         for (const topic of chapter.topics) {
           if (!record(topic) || !validID(topic.id) || topics.has(topic.id) || (topic.subject && topic.subject !== subject.id) || (topic.chapterId && topic.chapterId !== chapter.id) || !title(topic.title) || !requiredText(topic.statement) || !stringArray(topic.pitfalls) || !stringArray(topic.questionPrompts)) error('知识点记录或编号无效');
+          if (topic.lesson !== undefined) {
+            const lesson = topic.lesson;
+            const fields = ['orientation','prerequisites','definitions','results','example','proof','application','connections'];
+            if (!record(lesson) || lesson.version !== 1 || fields.some(key => !requiredText(lesson[key])) || !list(lesson.checks,20) || lesson.checks.length < 2 || lesson.checks.some(check => !record(check) || !requiredText(check.question) || !requiredText(check.answer))) error('复习讲义或自测回答格式无效');
+          }
           sourcePage(topic.sourceId ?? chapter.sourceId, topic.sourcePage ?? chapter.pageStart, subject.id);
           topics.set(topic.id, subject.id);
           if (topics.size > LIMITS.topics) error('知识点数量超过本机读取限制');
