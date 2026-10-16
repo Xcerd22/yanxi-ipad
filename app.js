@@ -117,12 +117,12 @@
   function lessonBody(t) {
     const lesson = t.lesson;
     if (!lesson || lesson.version !== 1) return `<div class="topic-statement">${rich(formatted(t,'statement'))}</div>${t.proofIdea ? `<div class="topic-label">证明与推导</div><div class="proof-block">${rich(formatted(t,'proofIdea'))}</div>` : ''}`;
-    const sections = [['orientation','先建立直觉'],['prerequisites','需要先记起的概念'],['definitions','定义与符号'],['results','结论与适用条件'],['example','跟着例子算一遍'],['proof','证明与推导'],['application','遇到题目怎么用'],['connections','把知识连起来']];
+    const sections = [['orientation','建立直觉'],['prerequisites','预备知识'],['definitions','定义与符号'],['results','结论与适用条件'],['example','例题'],['proof','证明与推导'],['application','解题应用'],['connections','知识联系']];
     return `<div class="lesson-body">${sections.filter(([key])=>typeof lesson[key]==='string'&&lesson[key].trim()).map(([key,label],i)=>`<section class="lesson-section lesson-${key}"><h4><span>${String(i+1).padStart(2,'0')}</span>${label}</h4><div class="lesson-text">${rich(lesson[key])}</div></section>`).join('')}</div>`;
   }
   function lessonChecks(t) {
-    if (!t.lesson || !Array.isArray(t.lesson.checks)) return arr(t.questionPrompts).length ? `<div class="prompt-block"><div class="topic-label">合上讲义，问问自己</div><ul>${arr(formatted(t,'questionPrompts')).map(p=>`<li>${rich(p)}</li>`).join('')}</ul></div>` : '';
-    return `<section class="lesson-checks"><h4>自测 · 先回答，再展开核对</h4>${t.lesson.checks.map((item,i)=>`<div class="lesson-check"><div class="lesson-check-question"><span>${i+1}.</span>${rich(item.question)}</div><details><summary>查看参考回答</summary><div class="lesson-check-answer">${rich(item.answer)}</div></details></div>`).join('')}</section>`;
+    if (!t.lesson || !Array.isArray(t.lesson.checks)) return arr(t.questionPrompts).length ? `<div class="prompt-block"><div class="topic-label">自测</div><ul>${arr(formatted(t,'questionPrompts')).map(p=>`<li>${rich(p)}</li>`).join('')}</ul></div>` : '';
+    return `<section class="lesson-checks"><h4>自测</h4>${t.lesson.checks.map((item,i)=>`<div class="lesson-check"><div class="lesson-check-question"><span>${i+1}.</span>${rich(item.question)}</div><details><summary>查看参考答案</summary><div class="lesson-check-answer">${rich(item.answer)}</div></details></div>`).join('')}</section>`;
   }
   function topicCard(t, i) {
     const level = progress.topicProgress[t.id]?.level || 0, saved = progress.bookmarks.includes(`topic:${t.id}`);
