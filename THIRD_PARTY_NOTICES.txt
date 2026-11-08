@@ -36,3 +36,12 @@ Source: https://github.com/pyinstaller/pyinstaller
 
 The user's reference PDFs are independent study materials; these component
 licenses do not relicense those PDFs. Their original notices remain intact.
+
+Optional desktop ChatGPT OAuth components (version 1.1.0)
+PyJWT 2.15.1 (MIT), cryptography 50.0.2 (Apache-2.0/BSD-3-Clause),
+cffi 2.1.1 (MIT), pycparser 3.12 (BSD-3-Clause).
+Original license texts are retained in the packaged licenses directory on
+Windows and the .deps/*.dist-info directories on Mac. PyPI wheel URLs and
+SHA-256 values for Mac are pinned in scripts/package_macos.py.
+AI requests use the official Sign in with ChatGPT OAuth flow and Responses API.
+This app is not an OpenAI product. No OpenAI credentials are included.

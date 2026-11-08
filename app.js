@@ -1,4 +1,4 @@
-/* 研习 — self-contained, offline study workspace. No external requests. */
+/* 研习 — offline study workspace; optional desktop AI is explicitly user-triggered. */
 'use strict';
 (() => {
   if (window.top && window.top !== window.self) return;
@@ -6,6 +6,10 @@
   window.YanxiSecurity?.assertTopLevel();
   const STORAGE_KEY = 'yanxi.study.v1';
   const platform = window.YanxiPlatform;
+  const ai = platform ? null : window.YanxiAI;
+  const notebook = window.YanxiNotes;
+  const examGuide = window.YanxiExamGuide;
+  let examGuideModel;
   let ready = false;
   const SUBJECT_ORDER = ['nonlinear', 'convex', 'algebra', 'geometry'];
   const SUBJECT_STYLES = {
@@ -27,7 +31,7 @@
   const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime()) && new Date(`${value}T12:00:00`).toISOString().slice(0, 10) === value;
   const afterDays = days => { const d = new Date(); d.setDate(d.getDate() + days); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-  const freshProgress = () => ({ version: 1, topicProgress: {}, notes: {}, bookmarks: [], wrong: [], examDate: '', dailyMinutes: 60, reviewLog: {}, lastBackup: '' });
+  const freshProgress = () => ({ version: 1, topicProgress: {}, notes: {}, notebook: {}, bookmarks: [], wrong: [], examDate: '', dailyMinutes: 60, reviewLog: {}, lastBackup: '' });
   let data = { subjects: [], sources: [], questions: [] }, subjects = new Map(), chapters = new Map(), topics = new Map(), sources = new Map(), questions = new Map();
   let progress = freshProgress(), storageAvailable = true, route = {}, searchToken = 0, toastTimer, reviewQueue = [], reviewIndex = 0, reviewRevealed = false, reviewSessionCount = 0, modalSource = null, modalPage = 1, modalPreviousFocus = null;
 
@@ -43,6 +47,7 @@
     }
     if (raw.notes && (typeof raw.notes !== 'object' || Array.isArray(raw.notes))) throw new Error('笔记数据格式不正确。');
     for (const [key, value] of Object.entries(raw.notes || {})) if (typeof value === 'string' && key.length <= 210 && !['__proto__', 'prototype', 'constructor'].includes(key)) next.notes[key] = value.slice(0, 100000);
+    next.notebook=notebook?.cleanCollection(raw.notebook)||{};
     for (const [key, value] of Object.entries(raw.topicProgress || {})) {
       if (!value || typeof value !== 'object' || !Number.isInteger(value.level) || value.level < 0 || value.level > 3 || ['__proto__', 'prototype', 'constructor'].includes(key)) continue;
       next.topicProgress[key] = { level: value.level, due: validDate(value.due) ? value.due : today(), lastReviewed: validDate(value.lastReviewed) ? value.lastReviewed : '', reviewCount: Math.max(0, Math.min(100000, Number(value.reviewCount) || 0)) };
@@ -91,10 +96,10 @@
   function mainHeading(eyebrow, title, subtitle, actions = '') { return `<div class="page-heading"><div><div class="eyebrow">${esc(eyebrow)}</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${actions ? `<div class="heading-actions">${actions}</div>` : ''}</div>`; }
 
   function renderNav() {
-    const links = [['dashboard', '⌂', '复习总览'], ['exams', '▤', '往年题与练习'], ['review', '↻', '主动回忆'], ['library', '▥', '参考资料'], ['settings', '⚙', '设置与备份']];
+    const links = [['dashboard', '⌂', '复习总览'], ['exams', '▤', '往年题与练习'], ['exam-guide','≡','往年题考点'], ['review', '↻', '主动回忆'], ['notes','✎','我的笔记'], ['library', '▥', '参考资料'], ['settings', '⚙', '设置与备份']];
     $('#main-nav').innerHTML = links.map(([id,icon,label]) => `<a class="nav-link ${route.view === id ? 'active' : ''}" href="${hash({view:id})}" ${route.view === id ? 'aria-current="page"' : ''}><span class="nav-icon" aria-hidden="true">${icon}</span>${label}${id === 'review' && dueTopics().length ? `<span class="nav-count">${dueTopics().length}</span>` : ''}</a>`).join('');
     $('#subject-nav').innerHTML = data.subjects.map(s => `<a class="nav-link subject-nav-link ${route.view === 'subject' && route.subject === s.id ? 'active' : ''}" href="${hash({view:'subject',subject:s.id})}" style="${subjStyle(s)}"><span class="subject-dot"></span>${esc(s.name)}</a>`).join('');
-    const names = { dashboard:'复习总览', subject:subjectName(route.subject), exams:'往年题与练习', review:'主动回忆', library:'参考资料', search:'搜索', settings:'设置与备份' };
+    const names = { dashboard:'复习总览', subject:subjectName(route.subject), exams:'往年题与练习', 'exam-guide':'往年题考点', review:'主动回忆', library:'参考资料', search:'搜索', settings:'设置与备份', notes:'我的笔记', ai:'AI 学习助手' };
     $('#breadcrumb').innerHTML = `<span>学习空间</span> &nbsp;/&nbsp; ${esc(names[route.view] || '复习总览')}`;
     const days = daysRemaining();
     $('#topbar-date').innerHTML = days === null ? '设置考试日期 <span>↗</span>' : days > 0 ? `距考试 <strong>${days}</strong> 天 <span>↗</span>` : days === 0 ? '今天考试 · 从容应考 <span>↗</span>' : '更新考试日期 <span>↗</span>';
@@ -118,7 +123,7 @@
     const lesson = t.lesson;
     if (!lesson || lesson.version !== 1) return `<div class="topic-statement">${rich(formatted(t,'statement'))}</div>${t.proofIdea ? `<div class="topic-label">证明与推导</div><div class="proof-block">${rich(formatted(t,'proofIdea'))}</div>` : ''}`;
     const sections = [['orientation','建立直觉'],['prerequisites','预备知识'],['definitions','定义与符号'],['results','结论与适用条件'],['example','例题'],['proof','证明与推导'],['application','解题应用'],['connections','知识联系']];
-    return `<div class="lesson-body">${sections.filter(([key])=>typeof lesson[key]==='string'&&lesson[key].trim()).map(([key,label],i)=>`<section class="lesson-section lesson-${key}"><h4><span>${String(i+1).padStart(2,'0')}</span>${label}</h4><div class="lesson-text">${rich(lesson[key])}</div></section>`).join('')}</div>`;
+    return `<div class="lesson-body">${sections.filter(([key])=>typeof lesson[key]==='string'&&lesson[key].trim()).map(([key,label],i)=>`<section class="lesson-section lesson-${key}" data-lesson-section="${key}"><h4><span>${String(i+1).padStart(2,'0')}</span>${label}</h4><div class="lesson-text">${rich(lesson[key])}</div></section>`).join('')}</div>`;
   }
   function lessonChecks(t) {
     if (!t.lesson || !Array.isArray(t.lesson.checks)) return arr(t.questionPrompts).length ? `<div class="prompt-block"><div class="topic-label">自测</div><ul>${arr(formatted(t,'questionPrompts')).map(p=>`<li>${rich(p)}</li>`).join('')}</ul></div>` : '';
@@ -252,23 +257,30 @@
   }
 
   function settingsView() {
-    const notesCount=Object.values(progress.notes).filter(Boolean).length;
+    const notesCount=Object.values(progress.notes).filter(Boolean).length+Object.keys(progress.notebook).length;
     return mainHeading('MAKE IT YOURS','按自己的节奏，准备。','设置考试时间，保留学习积累。软件和资料可离线使用，个人进度保存在当前浏览器中。') +
-      `${!storageAvailable?'<div class="info-banner orange">浏览器本地存储不可用或上次保存失败，请先导出备份以免丢失进度。</div>':''}<div class="settings-grid"><section class="panel settings-panel"><h2>我的复习计划</h2><p>用考试日期作为提醒，以每天能持续投入的时间安排学习。</p><form id="settings-form"><label class="form-field">考试日期<input type="date" name="examDate" value="${esc(progress.examDate)}"><small>尚未确定时可留空。设置日期不会改变题目范围。</small></label><label class="form-field">每日建议学习时间（分钟）<input type="number" name="dailyMinutes" min="10" max="600" step="5" required value="${progress.dailyMinutes}"><small>作为自己的每日学习时间目标。</small></label><div class="settings-actions"><button class="btn btn-primary" type="submit">保存设置</button></div></form></section><section class="panel settings-panel"><h2>学习进度与备份</h2><p>笔记、收藏、错题与回忆记录只保存在当前浏览器。发送软件不会自动带走你的个人进度；更换电脑或浏览器时，用备份文件迁移。</p><div class="backup-status">${learnedCount()} 个已学知识点 · ${notesCount} 条笔记 · ${progress.bookmarks.length} 个收藏 · ${progress.wrong.length} 道错题<br>${progress.lastBackup?`最近导出：${esc(progress.lastBackup)}`:'还没有导出记录。建议每次完成较多笔记后导出一份。'}</div><div class="settings-actions"><button class="btn btn-primary" data-action="export">导出学习备份 ↓</button><button class="btn btn-light" data-action="import">导入备份 ↑</button><input class="import-input" id="import-file" type="file" accept=".json,application/json"></div><p class="subtle" style="margin-top:13px">导入时按条目合并，备份中相同条目的记录覆盖本机记录。软件会先自动导出本机备份。</p></section></div>`;
+      `${!platform?`<div class="software-version"><span>研习 · 电脑版</span><span class="tag green">当前版本 ${esc(data.version||'未知')}</span></div>`:''}${!storageAvailable?'<div class="info-banner orange">浏览器本地存储不可用或上次保存失败，请先导出备份以免丢失进度。</div>':''}<div class="settings-grid"><section class="panel settings-panel"><h2>我的复习计划</h2><p>用考试日期作为提醒，以每天能持续投入的时间安排学习。</p><form id="settings-form"><label class="form-field">考试日期<input type="date" name="examDate" value="${esc(progress.examDate)}"><small>尚未确定时可留空。设置日期不会改变题目范围。</small></label><label class="form-field">每日建议学习时间（分钟）<input type="number" name="dailyMinutes" min="10" max="600" step="5" required value="${progress.dailyMinutes}"><small>作为自己的每日学习时间目标。</small></label><div class="settings-actions"><button class="btn btn-primary" type="submit">保存设置</button></div></form></section><section class="panel settings-panel"><h2>学习进度与备份</h2><p>笔记、收藏、错题与回忆记录只保存在当前浏览器。发送软件不会自动带走你的个人进度；更换电脑或浏览器时，用备份文件迁移。</p><div class="backup-status">${learnedCount()} 个已学知识点 · ${notesCount} 条笔记 · ${progress.bookmarks.length} 个收藏 · ${progress.wrong.length} 道错题<br>${progress.lastBackup?`最近导出：${esc(progress.lastBackup)}`:'还没有导出记录。建议每次完成较多笔记后导出一份。'}</div><div class="settings-actions"><button class="btn btn-primary" data-action="export">导出学习备份 ↓</button><button class="btn btn-light" data-action="import">导入备份 ↑</button><input class="import-input" id="import-file" type="file" accept=".json,application/json"></div><p class="subtle" style="margin-top:13px">导入时按条目合并，备份中相同条目的记录覆盖本机记录。软件会先自动导出本机备份。</p></section></div>`;
   }
 
   function render() {
     if(!ready)return;
     const prior=route; route={view:'dashboard',...currentRoute()};
-    if(!['dashboard','subject','exams','review','library','search','settings'].includes(route.view))route.view='dashboard';
+    const legacyAI=ai&&route.view==='ai', legacySeed=route.seed;
+    if(legacyAI){route=prior.view&&prior.view!=='ai'?{...prior}:{view:'dashboard'};history.replaceState(null,'',hash(route));}
+    if(!['dashboard','subject','exams','exam-guide','review','library','search','settings','notes'].includes(route.view))route.view='dashboard';
     if(route.subject && !subjects.has(route.subject))delete route.subject;
     searchToken++;
     if(route.view==='review'&&(prior.view!=='review'||prior.subject!==route.subject||prior.filter!==route.filter||prior.practice!==route.practice))buildReview();
-    const views={dashboard,subject:subjectView,exams:examsView,review:reviewView,library:libraryView,search:searchView,settings:settingsView};
+    const views={dashboard,subject:subjectView,exams:examsView,'exam-guide':()=>examGuide.render(examGuideModel,route,{rich,hash,sourceButton,heading:mainHeading}),review:reviewView,library:libraryView,search:searchView,settings:settingsView,notes:()=>notebook.view(route)};
     $('#main').innerHTML=views[route.view](); renderNav(); closeSidebar();
     platform?.afterRender(data,route);
+    ai?.mount(route);
+    if(legacyAI){if(legacySeed)ai.useContext(legacySeed);else ai.open();}
     if(route.view==='search')$('#search-input').value=route.q||'';
-    if(route.topic&&route.view==='subject')requestAnimationFrame(()=>document.getElementById(`topic-${route.topic}`)?.scrollIntoView({block:'start'}));
+    if(route.view==='exam-guide'&&route.topic){
+      requestAnimationFrame(()=>{document.querySelector('.exam-guide-card')?.scrollIntoView({block:'start'});const active=document.querySelector('.exam-guide-index [aria-current]'),index=document.querySelector('.exam-guide-index');if(active&&index)index.scrollTop=Math.max(0,active.offsetTop-index.offsetTop-100);});
+    }
+    else if(route.topic&&route.view==='subject')requestAnimationFrame(()=>document.getElementById(`topic-${route.topic}`)?.scrollIntoView({block:'start'}));
     else if(route.question&&route.view==='exams')requestAnimationFrame(()=>document.getElementById(`question-${route.question}`)?.scrollIntoView({block:'start'}));
     else window.scrollTo({top:0,behavior:'instant'});
   }
@@ -279,9 +291,11 @@
     modalPreviousFocus=document.activeElement; modalSource=source; modalPage=clampPage(source,page);
     $('#modal-root').innerHTML=`<div class="modal-backdrop" data-action="modal-backdrop"><section class="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-modal-title"><header class="modal-header"><div><h2 id="source-modal-title">${esc(source.title)}</h2><small>${esc(subjectName(source.subject))} · ${esc(source.category)} · PDF 页序</small></div><button class="icon-button" data-action="source-close" aria-label="关闭原文阅读器">✕</button></header><div class="modal-toolbar"><button class="btn btn-light btn-small" data-action="source-prev">← 上一页</button><label><span class="sr-only">PDF 页码</span><input class="page-input" id="source-page-input" type="number" min="1" max="${Number(source.pages)||99999}" value="${modalPage}"> / ${Number(source.pages)||'?'} 页</label><button class="btn btn-light btn-small" data-action="source-next">下一页 →</button><button class="btn btn-light btn-small" data-action="source-zoom">放大 / 适宽</button><a class="btn btn-soft btn-small" id="source-pdf-link" ${platform ? 'aria-disabled="true"' : `href="/api/pdf/${encodeURIComponent(source.id)}#page=${modalPage}"`} target="_blank" rel="noopener">完整 PDF ↗</a></div><div class="page-image-wrap" id="page-image-wrap"></div><footer class="modal-footer"><span>页码按 PDF 页序计算。扫描资料加载可能需要数秒。</span><span>← → 翻页 · Esc 关闭</span></footer></section></div>`;
     document.body.style.overflow='hidden'; updateSourcePage(); $('[data-action="source-close"]',$('#modal-root')).focus();
+    ai?.syncLayout();
   }
   function updateSourcePage() {
     if(!modalSource)return;
+    ai?.refreshContext();
     const imageWrap=$('#page-image-wrap'), id=modalSource.id, page=modalPage;
     imageWrap.innerHTML='<div class="page-loading">正在读取原始资料页面…</div>';
     $('#source-page-input').value=page;
@@ -298,7 +312,7 @@
     $('#source-page-input').value=page; $('#source-pdf-link').href=`/api/pdf/${encodeURIComponent(id)}#page=${page}`;
     $('[data-action="source-prev"]').disabled=page<=1; $('[data-action="source-next"]').disabled=Number(modalSource.pages)>0&&page>=Number(modalSource.pages);
   }
-  function closeSource() { platform?.cancelRender();$('#modal-root').replaceChildren();document.body.style.overflow='';modalSource=null;modalPreviousFocus?.focus?.(); }
+  function closeSource() { platform?.cancelRender();$('#modal-root').replaceChildren();document.body.style.overflow='';modalSource=null;modalPreviousFocus?.focus?.();ai?.refreshContext(); }
   function closeSidebar() { $('#sidebar').classList.remove('open');$('#sidebar-scrim').classList.remove('open');$('#menu-toggle').setAttribute('aria-expanded','false'); }
   async function copyLocation(value) {
     const url=new URL(location.href);url.hash=value;const text=url.href;
@@ -312,7 +326,7 @@
   }
   async function importProgress(file) {
     if(!file)return;
-    try { if(file.size>20*1024*1024)throw new Error('备份文件大于 20 MB，请检查是否选错文件。');const incoming=sanitizeProgress(JSON.parse(await file.text()));exportProgress('研习导入前自动备份',false);progress={...progress,...incoming,topicProgress:{...progress.topicProgress,...incoming.topicProgress},notes:{...progress.notes,...incoming.notes},bookmarks:[...new Set([...progress.bookmarks,...incoming.bookmarks])],wrong:[...new Set([...progress.wrong,...incoming.wrong])],reviewLog:{...progress.reviewLog,...incoming.reviewLog},lastBackup:progress.lastBackup};save();render();toast('已合并导入；原有进度已先下载为备份。'); }
+    try { if(file.size>20*1024*1024)throw new Error('备份文件大于 20 MB，请检查是否选错文件。');const incoming=sanitizeProgress(JSON.parse(await file.text()));exportProgress('研习导入前自动备份',false);progress={...progress,...incoming,topicProgress:{...progress.topicProgress,...incoming.topicProgress},notes:{...progress.notes,...incoming.notes},notebook:{...progress.notebook,...incoming.notebook},bookmarks:[...new Set([...progress.bookmarks,...incoming.bookmarks])],wrong:[...new Set([...progress.wrong,...incoming.wrong])],reviewLog:{...progress.reviewLog,...incoming.reviewLog},lastBackup:progress.lastBackup};save();render();toast('已合并导入；原有进度已先下载为备份。'); }
     catch(e){toast(`导入失败：${e.message}`);}
   }
 
@@ -353,20 +367,100 @@
   });
   document.addEventListener('submit',event=>{
     if(event.target.id==='search-form'){event.preventDefault();go({view:'search',q:$('#search-input').value.trim()});}
+    if(event.target.id==='exam-guide-search'){event.preventDefault();go({...route,topic:'',q:String(new FormData(event.target).get('q')||'').trim().slice(0,200)});}
     if(event.target.id==='page-search-form'){event.preventDefault();go({view:'search',subject:route.subject,q:new FormData(event.target).get('q').trim()});}
     if(event.target.id==='settings-form'){event.preventDefault();const form=new FormData(event.target),date=form.get('examDate');if(date&&!validDate(date)){toast('请输入有效的考试日期。');return;}progress.examDate=date;progress.dailyMinutes=Math.max(10,Math.min(600,Number(form.get('dailyMinutes'))||60));save();renderNav();toast('复习计划已保存。');}
   });
   document.addEventListener('keydown',event=>{
+    if(notebook?.isOpen())return;
     const typing=/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+    if(event.key==='Escape'&&ai?.isOpen()&&(ai.contains(event.target)||!modalSource)){event.preventDefault();ai.close();return;}
     if(event.key==='Escape'){if(modalSource)closeSource();else closeSidebar();}
     if(event.key==='/'&&!typing&&!modalSource){event.preventDefault();$('#search-input').focus();}
-    if(modalSource&&!typing&&(event.key==='ArrowLeft'||event.key==='ArrowRight')){event.preventDefault();modalPage=clampPage(modalSource,modalPage+(event.key==='ArrowLeft'?-1:1));updateSourcePage();}
-    if(modalSource&&event.key==='Tab'){const elements=[...$('#modal-root').querySelectorAll('button:not(:disabled),a,input')],first=elements[0],last=elements[elements.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
+    if(modalSource&&!typing&&!ai?.contains(event.target)&&(event.key==='ArrowLeft'||event.key==='ArrowRight')){event.preventDefault();modalPage=clampPage(modalSource,modalPage+(event.key==='ArrowLeft'?-1:1));updateSourcePage();}
+    if(modalSource&&event.key==='Tab'){const selector='button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary',elements=[...$('#modal-root').querySelectorAll(selector),...(ai?.isOpen()?[...$('#ai-sidebar').querySelectorAll(selector)]:[])].filter(el=>el.getClientRects().length),first=elements[0],last=elements[elements.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
   });
   $('#menu-toggle').addEventListener('click',()=>{const open=$('#sidebar').classList.toggle('open');$('#sidebar-scrim').classList.toggle('open',open);$('#menu-toggle').setAttribute('aria-expanded',open);});
   $('#sidebar-scrim').addEventListener('click',closeSidebar);
+  document.addEventListener('change',event=>{if(event.target.id==='exam-guide-practice')go({...route,topic:'',practice:event.target.checked?'all':''});});
+  document.addEventListener('click',event=>{if(event.target.closest('[data-guide-jump]')){event.preventDefault();document.getElementById('exam-guide-questions')?.scrollIntoView({block:'start'});}});
   window.addEventListener('hashchange',render);
   window.addEventListener('storage',event=>{if(ready&&event.key===STORAGE_KEY&&event.newValue){try{progress=sanitizeProgress(JSON.parse(event.newValue));renderNav();toast('另一窗口的学习进度已同步，切换页面可查看。');}catch{}}});
+  function readingContext() {
+    if(modalSource)return {context:{sourceId:modalSource.id,page:modalPage},seed:`page:${modalSource.id}:${modalPage}`,title:`${modalSource.title} · PDF ${modalPage} 页`,subject:modalSource.subject,scope:`page:${modalSource.id}:${modalPage}`};
+    const mostVisible = selector => [...document.querySelectorAll(selector)].map(el=>{
+      const r=el.getBoundingClientRect(), height=Math.max(0,Math.min(innerHeight,r.bottom)-Math.max(120,r.top));
+      const readingLine=Math.max(160,innerHeight*.5);
+      return {el,height,anchor:r.top<=readingLine&&r.bottom>readingLine};
+    }).filter(x=>x.height>40).sort((a,b)=>Number(b.anchor)-Number(a.anchor)||b.height-a.height)[0]?.el;
+    if(route.view==='exams') {
+      const card=mostVisible('#main article[id^="question-"]');
+      const q=questions.get(card?.id.slice(9)||route.question);
+      return q?{context:{question:q.id},seed:'question:'+q.id,title:subjectName(q.subject)+' / '+q.title,subject:q.subject,scope:'question:'+q.id}:null;
+    }
+    if(route.view!=='subject'&&route.view!=='review'&&route.view!=='exam-guide')return null;
+    const card=mostVisible('#main article[id^="topic-"]');
+    const t=topics.get(route.view==='review'?reviewQueue[reviewIndex]:card?.id.slice(6)) || (route.view==='exam-guide'?topics.get(examGuide.select(examGuideModel,route).selected?.id):null);
+    let c=chapters.get(t?.chapterId || (route.topic?topics.get(route.topic)?.chapterId:route.chapter));
+    if(!c || (route.subject&&c.subject!==route.subject))c=subjects.get(route.subject)?.chapters?.[0];
+    if(!c)return null;
+    const context={chapter:c.id};
+    let title=subjectName(c.subject)+' / '+c.title;
+    if(t){
+      context.topic=t.id;title+=' / '+t.title;
+      const section=mostVisible(card?`#${card.id} [data-lesson-section]`:'#main .flashcard [data-lesson-section]');
+      if(section){context.section=section.dataset.lessonSection;title+=' · '+section.querySelector('h4')?.textContent.replace(/^\d+\s*/,'');}
+    }
+    return {context,title,subject:c.subject,seed:t?'topic:'+t.id:'chapter:'+c.id,scope:'chapter:'+c.id};
+  }
+  function historyLocation(context={}) {
+    if(context.chapter){const c=chapters.get(context.chapter);return c?{context:{chapter:c.id},scope:'chapter:'+c.id,title:subjectName(c.subject)+' / '+c.title,subject:c.subject,seed:'chapter:'+c.id}:null;}
+    if(context.question){const q=questions.get(context.question);return q?{context:{question:q.id},scope:'question:'+q.id,title:subjectName(q.subject)+' / '+q.title,subject:q.subject,seed:'question:'+q.id}:null;}
+    if(context.sourceId){const s=sources.get(context.sourceId),page=Math.max(1,Number(context.page)||1);return s?{context:{sourceId:s.id,page},scope:`page:${s.id}:${page}`,title:`${s.title} · PDF ${page} 页`,subject:s.subject,seed:`page:${s.id}:${page}`}:null;}
+    return {context:{},scope:'general',title:'其他提问',subject:'',seed:''};
+  }
+  function historyScope(info) {
+    const location=historyLocation(info?.context);
+    return location?{scope:location.scope,scopeTitle:location.title,subject:location.subject,context:location.context}:null;
+  }
+  function openHistory(context) {
+    const location=historyLocation(context);if(!location)return;
+    if(context.sourceId){openSource(context.sourceId,context.page);return;}
+    if(modalSource)closeSource();
+    window.location.hash=hash(context.chapter?{view:'subject',subject:location.subject,chapter:context.chapter}:context.question?{view:'exams',subject:location.subject,question:context.question}:{view:'dashboard'});
+  }
+  function legacyNotes() {
+    return Object.entries(progress.notes).filter(([,body])=>body.trim()).map(([key,body])=>{
+      const t=key.startsWith('topic:')?topics.get(key.slice(6)):null,q=key.startsWith('question:')?questions.get(key.slice(9)):null;
+      const context=t?{chapter:t.chapterId,topic:t.id}:q?{question:q.id}:{};
+      return {id:'legacy:'+key,legacyKey:key,title:t?.title||q?.title||'已有笔记',body,subject:t?.subject||q?.subject||'',context,contextTitle:historyLocation(context)?.title||'',origin:'manual',references:[],updatedAt:0};
+    });
+  }
+  function noteContextLinks(context={}) {
+    const loc=historyLocation(context);if(!loc)return '';
+    if(context.sourceId)return sourceButton(context.sourceId,context.page,'回到原文');
+    if(context.chapter)return `<a class="text-link" href="${hash({view:'subject',subject:loc.subject,chapter:context.chapter,topic:context.topic})}">回到章节 ↗</a>`;
+    if(context.question)return `<a class="text-link" href="${hash({view:'exams',subject:loc.subject,question:context.question})}">回到题目 ↗</a>`;
+    return '';
+  }
+  function commitNotebook(draft,expected) {
+    // Re-read immediately before the single confirmed write; do not overwrite another window's progress.
+    const raw=localStorage.getItem(STORAGE_KEY),latest=raw?sanitizeProgress(JSON.parse(raw)):freshProgress();
+    let saved;
+    if(draft.legacyKey){
+      if((latest.notes[draft.legacyKey]||'')!==expected)throw new Error('此笔记已在另一窗口修改。请保留当前草稿并重新打开笔记核对。');
+      if(typeof draft.body!=='string'||draft.body.length>100000)throw new Error('知识点笔记正文限 10 万字。');
+      latest.notes[draft.legacyKey]=draft.body;saved=draft;
+    } else {
+      const note=notebook.clean(draft),old=latest.notebook[note.id];
+      if(!old&&Object.keys(latest.notebook).length>=2000)throw new Error('当前笔记已达 2000 篇，请先导出备份并整理。');
+      if((old?.revision||'')!==expected)throw new Error('此笔记已在另一窗口修改。请保留当前草稿并重新打开笔记核对。');
+      saved={...note,revision:crypto.randomUUID(),createdAt:old?.createdAt||note.createdAt||Date.now(),updatedAt:Date.now()};
+      latest.notebook[note.id]=saved;
+    }
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(latest));}catch{throw new Error('浏览器未能保存笔记，草稿仍保留在这里。请检查可用存储空间后重试。');}
+    progress=latest;storageAvailable=true;renderNav();return saved;
+  }
   async function start() {
     try {
       if(platform) { const imported=await platform.initialize();if(!imported)return;data=imported; }
@@ -375,7 +469,14 @@
       readProgress();
       orderCourses();
       data.subjects.forEach(s=>{const style=SUBJECT_STYLES[s.id]||SUBJECT_STYLES.nonlinear;s._color=/^#[0-9a-fA-F]{3,8}$/.test(s.color||'')?s.color:style.color;s._tint=style.tint;s._glyph=style.glyph;subjects.set(s.id,s);arr(s.chapters).forEach(c=>{c.subject=c.subject||s.id;chapters.set(c.id,c);arr(c.topics).forEach(t=>{t.subject=t.subject||s.id;t.chapterId=c.id;t.sourceId=t.sourceId||c.sourceId;t.sourcePage=t.sourcePage||c.pageStart;topics.set(t.id,t);});});});
-      data.sources.forEach(s=>sources.set(s.id,s));data.questions.forEach(q=>questions.set(q.id,q));ready=true;render();
+      data.sources.forEach(s=>sources.set(s.id,s));data.questions.forEach(q=>questions.set(q.id,q));
+      examGuideModel=examGuide.build(data);
+      notebook?.init({rich,hash,sourceButton,toast,go,contextLinks:noteContextLinks,subjects:()=>data.subjects,list:()=>Object.values(progress.notebook),legacy:legacyNotes,commit:commitNotebook,
+        location:()=>{const current=readingContext();return current?historyScope(current):{subject:route.subject||''};},saved:id=>{if(route.view==='notes')go({...route,note:id});},openChat:ai? id=>ai.openConversation(id):null});
+      ai?.init({rich,hash,sourceButton,toast,closeReader:()=>{if(modalSource)closeSource();},context:readingContext,historyScope,historyLocation,openHistory,
+        noteDiscussion:(thread,index)=>notebook.fromDiscussion(thread,index),
+        subjects:()=>data.subjects,item:id=>id.startsWith('topic:')?topics.get(id.slice(6)):questions.get(id.slice(9))});
+      ready=true;render();
       if(!storageAvailable)toast('本地进度暂未成功读取，请使用设置中的导出备份保留学习记录。');
     } catch(e) { $('#main').innerHTML=empty('暂时打不开本地资料',`请确认研习程序正在运行，资料目录与软件包保持完整。${e.message}`, '<button class="btn btn-primary" data-action="reload">重新读取</button>'); }
   }
