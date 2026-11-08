@@ -568,6 +568,16 @@
   function afterRender(data, route) {
     document.body.classList.remove('ipad-onboarding');
     updateOfflineUI();
+    if (route.view === 'exam-guide' && data.subjects.some(subject => subject.chapters.some(chapter =>
+      chapter.topics.some(topic => !topic.lesson?.definitions || !topic.lesson?.results)))) {
+      const layout = document.querySelector('#main .exam-guide-layout');
+      if (layout && !document.querySelector('#ipad-guide-materials-notice')) {
+        const notice = document.createElement('div');
+        notice.id = 'ipad-guide-materials-notice'; notice.className = 'info-banner orange';
+        notice.innerHTML = '本机资料包尚未包含完整的分层复习讲义。请在“设置与备份 → 此 iPad 的离线资料”导入新版 .yanxi 资料包，补齐考点的定义、定理与例题。已有题目仍可查看；更新应用本身不会下载教材。 <a class="text-link" href="#view=settings">前往更新本机资料 →</a>';
+        layout.before(notice);
+      }
+    }
     if (route.view !== 'settings') return;
     const grid = document.querySelector('#main .settings-grid'); if (!grid) return;
     mountUpdatePanel(grid);
